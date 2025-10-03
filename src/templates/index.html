@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Distributed App</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f9f9f9; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; padding-top: 40px; }
+        .box { text-align: center; padding: 20px 40px; border-radius: 12px; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin-bottom: 20px; width: 400px; }
+        input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 200px; }
+        button { padding: 8px 14px; margin-left: 8px; background-color: #4CAF50; color: white; border: none; border-radius: 6px; cursor: pointer; }
+        button:hover { background-color: #45a049; }
+        ul { list-style-type: none; padding-left: 0; text-align: left; }
+        li { padding: 4px 0; border-bottom: 1px solid #eee; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>🚀 I am <b>{{ container_name }}</b> Container</h1>
+
+        {% if container_name == "Master" %}
+        <form id="messageForm">
+            <input type="text" id="messageInput" placeholder="Enter message" required>
+            <button type="submit">Send</button>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="box">
+        <h2>Messages:</h2>
+        {% if messages %}
+        <ul>
+            {% for msg in messages %}
+            <li>{{ msg }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>No messages yet.</p>
+        {% endif %}
+    </div>
+
+    <script>
+    const form = document.getElementById("messageForm");
+    if (form) {
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const message = document.getElementById("messageInput").value;
+            if (!message) return;
+
+            try {
+                const response = await fetch("/master/append-message", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    const data = await response.json();
+                    alert("Error: " + (data.detail || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Error: " + err);
+            }
+        });
+    }
+</script>
+</body>
+</html>
