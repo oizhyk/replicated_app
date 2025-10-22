@@ -63,14 +63,30 @@ async def append_message(msg: Message):
         raise HTTPException(
             status_code=403, detail="Only Master container can append messages"
         )
-    logger.warning(f"Message received in Master node")
+    logger.warning(f"Message {msg.message} received in Master node")
 
     async with lock:
         message_id += 1
         entry = {"id": message_id, "message": msg.message}
         messages.append(entry)
         logger.warning(f"Message stored in Master node")
-    await asyncio.gather(*(send_to_follower(url, entry) for url in FOLLOWERS_URL.keys()))
+
+    replication_tasks = [
+        asyncio.create_task(
+            send_to_follower(url, entry)
+        ) for url in FOLLOWERS_URL.keys()
+    ]
+
+    if msg.write_concern == 1:
+        return {"status": "ok"}
+
+    if msg.write_concern == 2:
+        wait_task = asyncio.FIRST_COMPLETED
+    else:
+        wait_task = asyncio.ALL_COMPLETED
+
+    done, _ = await asyncio.wait(replication_tasks, return_when=wait_task)
+
     return {"status": "ok"}
 
 
