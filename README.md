@@ -20,7 +20,7 @@ docker compose up --build
   ```bash
   curl -X POST http://0.0.0.0:8000/master/append-message \
        -H "Content-Type: application/json" \
-       -d '{"message": "Message 2", "write_concern": 2}'
+       -d '{"message": "Message 1", "w": 2}'
 
 - **`GET /list-messages`**  
   Повертає всі повідомлення інстанса.

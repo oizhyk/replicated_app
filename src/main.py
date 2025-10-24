@@ -16,7 +16,7 @@ logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("uvicorn.error").setLevel(logging.ERROR)
 logging.getLogger("uvicorn.access").setLevel(logging.ERROR)
 logging.basicConfig(
-    level=logging.WARN,
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -30,13 +30,16 @@ messages = []
 message_id = 0
 lock = asyncio.Lock()
 
-async def send_to_follower(url: str, message: dict) -> None:
+async def send_to_follower(url: str, message: dict) -> bool:
     async with httpx.AsyncClient() as client:
         try:
-            await client.post(url, json=message, timeout=20)
-            logger.warning(f"Message sent to {FOLLOWERS_URL[url]}")
+            await client.post(url, json=message, timeout=30)
+            logger.info(f"Message sent to {FOLLOWERS_URL[url]}")
+            return True
         except Exception as e:
             logger.error(f"Failed to send message to {url}: {e}")
+
+        return False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -63,13 +66,15 @@ async def append_message(msg: Message):
         raise HTTPException(
             status_code=403, detail="Only Master container can append messages"
         )
-    logger.warning(f"Message {msg.message} received in Master node")
+    logger.info(f"Message {msg.message} received in Master node")
+
+    write_concern = msg.w
 
     async with lock:
         message_id += 1
         entry = {"id": message_id, "message": msg.message}
         messages.append(entry)
-        logger.warning(f"Message stored in Master node")
+        logger.info(f"Message stored in Master node")
 
     replication_tasks = [
         asyncio.create_task(
@@ -77,15 +82,18 @@ async def append_message(msg: Message):
         ) for url in FOLLOWERS_URL.keys()
     ]
 
-    if msg.write_concern == 1:
+    write_concern -= 1
+
+    if write_concern == 0:
         return {"status": "ok"}
 
-    if msg.write_concern == 2:
-        wait_task = asyncio.FIRST_COMPLETED
-    else:
-        wait_task = asyncio.ALL_COMPLETED
+    for future in asyncio.as_completed(replication_tasks):
+        result = await future
+        if result:
+            write_concern -= 1
 
-    done, _ = await asyncio.wait(replication_tasks, return_when=wait_task)
+        if write_concern == 0:
+            break
 
     return {"status": "ok"}
 
@@ -98,7 +106,7 @@ async def add_message_follower(msg: MessageWithId):
     async with lock:
         messages.append(msg.model_dump())
 
-    logger.warning(f"Message stored in {os.getenv("CONTAINER_NAME")} node")
+    logger.info(f"Message stored in {os.getenv("CONTAINER_NAME")} node")
     return {"status": "ok"}
 
 
