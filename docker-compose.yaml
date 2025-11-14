@@ -17,7 +17,7 @@ services:
     container_name: follower_container_1
     environment:
       - CONTAINER_NAME=Follower 1
-      - DELAY_SECONDS=3
+      - DELAY_SECONDS=0
     volumes:
       - ./src:/src
     ports:

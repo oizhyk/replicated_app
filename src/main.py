@@ -27,11 +27,11 @@ FOLLOWERS_URL = {
     "http://follower2:8000/follower": "Follower 2"
 }
 
-MAX_RETRIES = 5
-
 messages = []
 follower_status = {}
 read_only_mode = False
+last_message_id = 0
+unordered_msg_buffer = {}
 message_ids = set()
 message_id = 0
 QUORUM = (len(FOLLOWERS_URL) + 1) // 2 + 1
@@ -60,23 +60,31 @@ async def check_follower_health(url: str, interval: int = 10):
             await asyncio.sleep(interval)
 
 async def send_to_follower(url: str, message: dict) -> bool:
+    global follower_status
+    attempt = 0
     async with httpx.AsyncClient() as client:
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                await client.post(f"{url}/append-message", json=message, timeout=40)
-                logger.info(f"Message sent to {FOLLOWERS_URL[url]}")
-                return True
-            except Exception:
-                base_delay = min(2 ** (attempt - 1), 30)
-                jitter = random.uniform(0, 5)
-                wait_time = base_delay + jitter
-                logger.warning(
-                    f"Failed to send to {FOLLOWERS_URL[url]} (attempt {attempt}/{MAX_RETRIES}). "
-                )
-                await asyncio.sleep(wait_time)
 
-        logger.error(f"Could not send message to {FOLLOWERS_URL[url]} after {MAX_RETRIES} attempts.")
-        return False
+        while True:
+            follower_is_available = follower_status[url]
+
+            if follower_is_available:
+                try:
+                    await client.post(f"{url}/append-message", json=message, timeout=30)
+                    logger.info(f"Message sent to {FOLLOWERS_URL[url]}")
+                    break
+                except Exception:
+                    logger.warning(f"Failed to send to {FOLLOWERS_URL[url]}. ")
+
+            logger.warning(f"{FOLLOWERS_URL[url]} not available. Retrying.")
+
+            base_delay = min(2 ** attempt, 100)
+            jitter = random.uniform(0, 5)
+            wait_time = base_delay + jitter
+            attempt +=1
+            await asyncio.sleep(wait_time)
+
+        return True
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -121,12 +129,10 @@ async def append_message(msg: Message):
         messages.append(entry)
         logger.info(f"Message stored in Master node")
 
-    active_followers = [url for url, alive in follower_status.items() if alive]
-
     replication_tasks = [
         asyncio.create_task(
             send_to_follower(url, entry)
-        ) for url in active_followers
+        ) for url, _ in FOLLOWERS_URL.items()
     ]
 
     write_concern -= 1
@@ -147,6 +153,7 @@ async def append_message(msg: Message):
 
 @app.post("/follower/append-message")
 async def add_message_follower(msg: MessageWithId):
+    global last_message_id, unordered_msg_buffer
     if delay_seconds := int(os.getenv("DELAY_SECONDS")):
         await asyncio.sleep(delay_seconds)
 
@@ -155,11 +162,24 @@ async def add_message_follower(msg: MessageWithId):
             logger.info(f"Duplicate message with id={msg.id} ignored in {os.getenv('CONTAINER_NAME')}")
             return {"status": "message_ignored"}
 
-        messages.append(msg.model_dump())
-        message_ids.add(msg.id)
+        if msg.id == last_message_id + 1:
+            store_message(msg)
+            while (next_id := last_message_id + 1) in unordered_msg_buffer:
+                buffered_msg = unordered_msg_buffer.pop(next_id)
+                store_message(buffered_msg)
 
-    logger.info(f"Message stored in {os.getenv("CONTAINER_NAME")} node")
+        if msg.id > last_message_id + 1:
+            unordered_msg_buffer[msg.id] = msg
+
     return {"status": "ok"}
+
+
+def store_message(msg: MessageWithId):
+    global last_message_id
+    messages.append(msg.model_dump())
+    message_ids.add(msg.id)
+    last_message_id = msg.id
+    logger.info(f"Message stored with id={msg.id} in {os.getenv("CONTAINER_NAME")} node")
 
 
 @app.get("/list-messages")
